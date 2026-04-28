@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "wave.",
+    "slug": "dmusic-react-native",
+    "scheme": "wave",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "splash": {
+      "backgroundColor": "#0A0A0F"
+    },
+    "plugins": [
+      "expo-web-browser"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "13e9aaef-c90d-467b-852d-c137886766e7"
+      }
+    }
+  }
+}
