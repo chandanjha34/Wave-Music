@@ -1,9 +1,14 @@
 import React, { createContext, ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 
 import { api } from '../services/api';
 import { Track } from '../types';
 import { clamp } from '../theme';
+
+const FALLBACK_STREAM_URL = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+
+const isPlayableUri = (value: string) =>
+  value.startsWith('http://') || value.startsWith('https://') || value.startsWith('file://');
 
 interface PlayerContextValue {
   currentTrack: Track | null;
@@ -70,8 +75,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       playsInSilentModeIOS: true,
       staysActiveInBackground: false,
       shouldDuckAndroid: true,
-      interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
-      interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
+      interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
     }).catch(() => undefined);
 
     return () => {
@@ -116,55 +121,61 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
     await unloadSound();
 
-    const sourceUri = track.localFilePath ?? api.getStreamUrl(track.id);
+    const primarySource = track.previewUrl && isPlayableUri(track.previewUrl)
+      ? track.previewUrl
+      : track.localFilePath && isPlayableUri(track.localFilePath)
+        ? track.localFilePath
+        : api.getStreamUrl(track.id);
 
-    try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: sourceUri },
-        {
-          shouldPlay,
-          progressUpdateIntervalMillis: 1000,
-          positionMillis: 0,
-        },
-        (status) => {
-          if (!status.isLoaded) {
-            if ('error' in status) {
-              setIsBuffering(false);
-              setIsPlaying(false);
-            }
-            return;
-          }
-
-          if (!mountedRef.current || token !== loadTokenRef.current) {
-            return;
-          }
-
-          setIsBuffering(status.isBuffering);
-          setIsPlaying(status.isPlaying);
-          setPosition(Math.floor(status.positionMillis / 1000));
-
-          if (status.didJustFinish) {
-            const nextQueue = queueRef.current;
-
-            if (repeatRef.current) {
-              void playTrackInternal(track, true);
-              return;
-            }
-
-            if (nextQueue.length > 1) {
-              const nextIndex = pickNextIndex(currentIndexRef.current, nextQueue.length);
-
-              if (nextIndex >= 0 && nextQueue[nextIndex]) {
-                setCurrentIndex(nextIndex);
-                void playTrackInternal(nextQueue[nextIndex], true);
-                return;
-              }
-            }
-
+    const createSound = (uri: string) => Audio.Sound.createAsync(
+      { uri },
+      {
+        shouldPlay,
+        progressUpdateIntervalMillis: 1000,
+        positionMillis: 0,
+      },
+      (status) => {
+        if (!status.isLoaded) {
+          if ('error' in status) {
+            setIsBuffering(false);
             setIsPlaying(false);
           }
-        },
-      );
+          return;
+        }
+
+        if (!mountedRef.current || token !== loadTokenRef.current) {
+          return;
+        }
+
+        setIsBuffering(status.isBuffering);
+        setIsPlaying(status.isPlaying);
+        setPosition(Math.floor(status.positionMillis / 1000));
+
+        if (status.didJustFinish) {
+          const nextQueue = queueRef.current;
+
+          if (repeatRef.current) {
+            void playTrackInternal(track, true);
+            return;
+          }
+
+          if (nextQueue.length > 1) {
+            const nextIndex = pickNextIndex(currentIndexRef.current, nextQueue.length);
+
+            if (nextIndex >= 0 && nextQueue[nextIndex]) {
+              setCurrentIndex(nextIndex);
+              void playTrackInternal(nextQueue[nextIndex], true);
+              return;
+            }
+          }
+
+          setIsPlaying(false);
+        }
+      },
+    );
+
+    try {
+      const { sound } = await createSound(primarySource);
 
       if (!mountedRef.current || token !== loadTokenRef.current) {
         await sound.unloadAsync().catch(() => undefined);
@@ -174,7 +185,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       soundRef.current = sound;
       setIsBuffering(false);
       setIsPlaying(shouldPlay);
-    } catch {
+    } catch (error) {
+      if (primarySource !== FALLBACK_STREAM_URL) {
+        try {
+          const { sound } = await createSound(FALLBACK_STREAM_URL);
+
+          if (!mountedRef.current || token !== loadTokenRef.current) {
+            await sound.unloadAsync().catch(() => undefined);
+            return;
+          }
+
+          soundRef.current = sound;
+          setIsBuffering(false);
+          setIsPlaying(shouldPlay);
+          return;
+        } catch {
+          // fall through to reset state below
+        }
+      }
+
+      console.error('Playback failed:', error);
       setIsBuffering(false);
       setIsPlaying(false);
     }

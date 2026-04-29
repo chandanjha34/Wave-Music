@@ -1,35 +1,131 @@
-import React, { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { mockTracks } from '../data/mock';
+import { KALSHI_CONFIG } from '../config';
 import { useAuth } from '../context/AuthContext';
+import { SingerMarketCard } from '../components/SingerMarketCard';
+import { KalshiMarketCard } from '../components/KalshiMarketCard';
 import { api } from '../services/api';
-import { Track } from '../types';
-import { ArtworkTile } from '../components/ArtworkTile';
+import { KalshiMarket, KalshiService } from '../services/kalshi';
+import { SingerMusicMarket } from '../types';
 import { theme, withAlpha } from '../theme';
 
 export function PredictionScreen() {
-  const { submitPrediction, user } = useAuth();
-  const tracks = useMemo(() => mockTracks.slice(0, 8), []);
-  const [selectedTrackId, setSelectedTrackId] = useState(tracks[0]?.id ?? '');
-  const [status, setStatus] = useState('');
+  const { user } = useAuth();
 
-  const selectedTrack = tracks.find((track) => track.id === selectedTrackId) ?? tracks[0];
+  const [activeTab, setActiveTab] = useState<'music' | 'kalshi'>('music');
+  const [musicMarkets, setMusicMarkets] = useState<SingerMusicMarket[]>([]);
+  const [musicLoading, setMusicLoading] = useState(false);
+  const [musicStatus, setMusicStatus] = useState('');
 
-  const handleVote = async (track: Track, isBanger: boolean) => {
+  const [kalshiMarkets, setKalshiMarkets] = useState<KalshiMarket[]>([]);
+  const [kalshiLoading, setKalshiLoading] = useState(false);
+  const [kalshiError, setKalshiError] = useState('');
+  const [kalshiBalance, setKalshiBalance] = useState(0);
+
+  const kalshiService = useMemo(() => {
     try {
-      setStatus('Submitting vote...');
-      const success = await submitPrediction(track.id, isBanger);
-      if (success) {
-        await api.submitPrediction(track.id, isBanger, `pred_${track.id}_${Date.now()}`);
-        setStatus(`${isBanger ? 'banger' : 'flop'} submitted for ${track.title} (-1 credit)`);
-      } else {
-        setStatus('Insufficient credits or error occurred.');
-      }
+      return new KalshiService(KALSHI_CONFIG.apiKeyId, KALSHI_CONFIG.privateKey);
     } catch (error) {
-      console.error('Prediction error:', error);
-      setStatus('Failed to submit prediction. Please try again.');
+      console.error('Failed to initialize Kalshi service:', error);
+      return null;
+    }
+  }, []);
+
+  const loadMusicMarkets = async () => {
+    setMusicLoading(true);
+    try {
+      const markets = await api.getSingerMarkets(8);
+      setMusicMarkets(markets);
+      setMusicStatus(markets.length > 0 ? '' : 'No singer markets available right now.');
+    } catch (error) {
+      console.error('Failed to load music markets:', error);
+      setMusicMarkets([]);
+      setMusicStatus('Unable to load singer markets right now.');
+    } finally {
+      setMusicLoading(false);
+    }
+  };
+
+  const loadKalshiData = async () => {
+    if (!kalshiService) {
+      setKalshiError('Failed to initialize Kalshi service');
+      return;
+    }
+
+    setKalshiLoading(true);
+    setKalshiError('');
+
+    try {
+      let markets: KalshiMarket[] = [];
+      let balance = 0;
+
+      try {
+        markets = await kalshiService.getOpenMarkets(undefined, 20);
+        const balanceData = await kalshiService.getBalance();
+        if (balanceData) {
+          balance = balanceData.balance / 100;
+        }
+      } catch (authError) {
+        console.warn('Auth failed, loading public markets:', authError);
+        markets = await KalshiService.getPublicMarkets(20);
+        setKalshiError('Showing public markets (auth unavailable)');
+      }
+
+      setKalshiMarkets(markets);
+      setKalshiBalance(balance);
+    } catch (error) {
+      console.error('Failed to load Kalshi data:', error);
+      setKalshiError('Failed to load prediction markets. Please check your connection.');
+    } finally {
+      setKalshiLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadMusicMarkets();
+  }, []);
+
+  const handleMusicQuote = async (market: SingerMusicMarket, quote: number, amount: number) => {
+    const result = await api.submitSingerMarketQuote(market.id, quote, amount);
+    if (result.ok) {
+      setMusicStatus(`${market.singerName} ${market.metric} quoted at ${quote.toLocaleString()} with ${amount.toLocaleString()} stake`);
+      return;
+    }
+
+    setMusicStatus('Failed to submit quote.');
+  };
+
+  const handleKalshiBet = async (
+    market: KalshiMarket,
+    side: 'yes' | 'no',
+    price: number,
+    count: number
+  ) => {
+    if (!kalshiService) {
+      setKalshiError('Kalshi service not available');
+      return;
+    }
+
+    try {
+      const order = {
+        ticker: market.ticker,
+        side,
+        action: 'buy' as const,
+        count,
+        type: 'limit' as const,
+        [side === 'yes' ? 'yes_price' : 'no_price']: Math.round(price * 100),
+        client_order_id: `${market.ticker}_${Date.now()}`,
+      };
+
+      await kalshiService.placeBet(order);
+      setKalshiError('');
+      await loadKalshiData();
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Failed to place bet';
+      setKalshiError(errorMsg);
+      throw error;
     }
   };
 
@@ -37,64 +133,110 @@ export function PredictionScreen() {
     <View style={styles.root}>
       <View style={styles.hero}>
         <Text style={styles.heroLabel}>prediction desk</Text>
-        <Text style={styles.heroTitle}>vote and earn bragging rights</Text>
-        <Text style={styles.heroCopy}>Submit predictions to vote on bangers and flops. Each prediction costs 1 credit.</Text>
+        <Text style={styles.heroTitle}>quote singer markets and trade opinions</Text>
+        <Text style={styles.heroCopy}>
+          {activeTab === 'music'
+            ? 'Browse singer markets powered by live iTunes metadata and quote a weekly views or likes number.'
+            : 'Place bets on Kalshi prediction markets'}
+        </Text>
         <View style={styles.creditsRow}>
           <Ionicons name="star" size={16} color={theme.colors.accent} />
-          <Text style={styles.creditsText}>{user?.credits ?? 0} credits remaining</Text>
+          <Text style={styles.creditsText}>
+            {activeTab === 'music' ? `${user?.credits ?? 0} credits` : `$${kalshiBalance.toFixed(2)} balance`}
+          </Text>
         </View>
       </View>
 
-      <Text style={styles.sectionTitle}>weekly picks</Text>
-      <FlatList<Track>
-        data={tracks}
-        keyExtractor={(item) => item.id}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View style={{ width: 12 }} />}
-        renderItem={({ item }: { item: Track }) => {
-          const active = item.id === selectedTrackId;
-          return (
-            <Pressable onPress={() => setSelectedTrackId(item.id)} style={[styles.pickCard, active && styles.pickCardActive]}>
-              <ArtworkTile seed={item.id} title={item.title} size={58} />
-              <Text style={styles.pickTitle} numberOfLines={1}>{item.title}</Text>
-              <Text style={styles.pickArtist} numberOfLines={1}>{item.artist}</Text>
-            </Pressable>
-          );
-        }}
-      />
+      <View style={styles.tabContainer}>
+        <Pressable style={[styles.tab, activeTab === 'music' && styles.tabActive]} onPress={() => setActiveTab('music')}>
+          <Ionicons name="musical-notes" size={16} color={activeTab === 'music' ? theme.colors.accent : theme.colors.muted} />
+          <Text style={[styles.tabLabel, activeTab === 'music' && styles.tabLabelActive]}>Music</Text>
+        </Pressable>
 
-      {selectedTrack ? (
-        <View style={styles.voteCard}>
-          <View style={styles.voteHeader}>
-            <Text style={styles.voteTitle}>{selectedTrack.title}</Text>
-            <Text style={styles.voteArtist}>{selectedTrack.artist}</Text>
+        <Pressable
+          style={[styles.tab, activeTab === 'kalshi' && styles.tabActive]}
+          onPress={() => {
+            setActiveTab('kalshi');
+            void loadKalshiData();
+          }}
+        >
+          <Ionicons name="trending-up" size={16} color={activeTab === 'kalshi' ? theme.colors.accent : theme.colors.muted} />
+          <Text style={[styles.tabLabel, activeTab === 'kalshi' && styles.tabLabelActive]}>Markets</Text>
+        </Pressable>
+      </View>
+
+      {activeTab === 'music' ? (
+        <>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>singer quote markets</Text>
+            <Text style={styles.sectionHint}>live iTunes metadata</Text>
           </View>
-          <View style={styles.voteButtons}>
-            <Pressable
-              onPress={() => void handleVote(selectedTrack, true)}
-              style={[styles.voteButton, styles.bangerButton, (user?.credits ?? 0) <= 0 && styles.voteButtonDisabled]}
-              disabled={(user?.credits ?? 0) <= 0}
-            >
-              <Text style={styles.voteButtonText}>banger</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => void handleVote(selectedTrack, false)}
-              style={[styles.voteButton, styles.flopButton, (user?.credits ?? 0) <= 0 && styles.voteButtonDisabled]}
-              disabled={(user?.credits ?? 0) <= 0}
-            >
-              <Text style={styles.voteButtonText}>flop</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.status}>{status || 'vote on a track to submit a prediction.'}</Text>
-        </View>
-      ) : null}
+
+          {musicLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={theme.colors.accent} />
+              <Text style={styles.loadingText}>Loading singer markets...</Text>
+            </View>
+          ) : musicMarkets.length > 0 ? (
+            <FlatList<SingerMusicMarket>
+              data={musicMarkets}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+              renderItem={({ item }) => <SingerMarketCard market={item} onQuote={handleMusicQuote} />}
+            />
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="musical-notes-outline" size={42} color={withAlpha(theme.colors.text, 0.3)} />
+              <Text style={styles.emptyText}>No singer markets available right now.</Text>
+            </View>
+          )}
+
+          {musicStatus ? <Text style={styles.status}>{musicStatus}</Text> : null}
+        </>
+      ) : (
+        <>
+          <Text style={styles.sectionTitle}>prediction markets</Text>
+
+          {kalshiError ? (
+            <View style={styles.errorCard}>
+              <Text style={styles.errorText}>{kalshiError}</Text>
+            </View>
+          ) : null}
+
+          {kalshiLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={theme.colors.accent} />
+              <Text style={styles.loadingText}>Loading markets...</Text>
+            </View>
+          ) : kalshiMarkets.length > 0 ? (
+            <FlatList<KalshiMarket>
+              data={kalshiMarkets}
+              keyExtractor={(item) => item.ticker}
+              scrollEnabled={false}
+              renderItem={({ item }) => (
+                <KalshiMarketCard
+                  market={item}
+                  onBet={(side, price, count) => handleKalshiBet(item, side, price, count)}
+                  balance={kalshiBalance}
+                  authRequired={kalshiError.includes('public markets')}
+                />
+              )}
+            />
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="trending-down" size={48} color={withAlpha(theme.colors.text, 0.3)} />
+              <Text style={styles.emptyText}>No markets available</Text>
+            </View>
+          )}
+        </>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
+    flex: 1,
     paddingHorizontal: 16,
     paddingTop: 8,
     gap: 16,
@@ -122,27 +264,47 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     lineHeight: 20,
   },
-  walletRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
   creditsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     marginTop: 4,
   },
-  walletText: {
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '700',
-  },
   creditsText: {
     color: theme.colors.text,
     fontSize: 12,
     fontWeight: '700',
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: withAlpha(theme.colors.text, 0.05),
+    gap: 6,
+  },
+  tabActive: {
+    backgroundColor: withAlpha(theme.colors.accent, 0.15),
+  },
+  tabLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: theme.colors.muted,
+  },
+  tabLabelActive: {
+    color: theme.colors.accent,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    marginTop: 4,
   },
   sectionTitle: {
     color: theme.colors.text,
@@ -150,74 +312,44 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textTransform: 'lowercase',
   },
-  pickCard: {
-    width: 150,
-    borderRadius: theme.radius.lg,
-    padding: 12,
-    backgroundColor: theme.colors.surface2,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    gap: 8,
-  },
-  pickCardActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: withAlpha(theme.colors.accent, 0.08),
-  },
-  pickTitle: {
-    color: theme.colors.text,
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  pickArtist: {
+  sectionHint: {
     color: theme.colors.muted,
     fontSize: 12,
+    textTransform: 'lowercase',
   },
-  voteCard: {
-    backgroundColor: withAlpha(theme.colors.surface, 0.92),
-    borderRadius: theme.radius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 18,
-    gap: 16,
-  },
-  voteHeader: {
-    gap: 4,
-  },
-  voteTitle: {
-    color: theme.colors.text,
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  voteArtist: {
-    color: theme.colors.muted,
-  },
-  voteButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  voteButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: theme.radius.pill,
+  loadingContainer: {
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 28,
+    gap: 10,
   },
-  bangerButton: {
-    backgroundColor: theme.colors.accent,
+  loadingText: {
+    color: theme.colors.muted,
+    fontSize: 13,
   },
-  flopButton: {
-    backgroundColor: theme.colors.accent2,
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 24,
+    gap: 10,
   },
-  voteButtonText: {
-    color: theme.colors.background,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+  emptyText: {
+    color: theme.colors.muted,
+    fontSize: 13,
   },
-  voteButtonDisabled: {
-    opacity: 0.5,
+  errorCard: {
+    backgroundColor: withAlpha('#FF6B6B', 0.1),
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF6B6B',
+  },
+  errorText: {
+    color: '#FF6B6B',
+    fontSize: 12,
   },
   status: {
     color: theme.colors.muted,
-    fontSize: 13,
+    fontSize: 12,
   },
 });

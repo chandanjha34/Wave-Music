@@ -23,6 +23,9 @@
       "eas": {
         "projectId": "13e9aaef-c90d-467b-852d-c137886766e7"
       }
+    },
+    "android": {
+      "package": "com.chandanjha.dmusicreactnative"
     }
   }
 }

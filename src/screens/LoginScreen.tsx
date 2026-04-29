@@ -1,28 +1,26 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
-import { isGoogleAuthConfigured } from '../config';
 import { theme, withAlpha } from '../theme';
 
 
 export function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { signInWithGoogle, isLoading } = useAuth();
+  const { signIn, isLoading } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Auth flow is handled inside AuthProvider; LoginScreen triggers it via signInWithGoogle()
-
-  const handleGooglePress = async () => {
+  const handleLoginPress = async () => {
     setAuthError(null);
-    if (!isGoogleAuthConfigured) {
-      setAuthError('Google auth is not configured yet. Add the Google client IDs to your Expo env vars.');
-      Alert.alert('Google auth not configured', 'Set the Google client IDs in your Expo env vars to enable login.');
+    if (!email.trim() || !password.trim()) {
+      setAuthError('Please enter email and password.');
       return;
     }
-    const ok = await signInWithGoogle();
+    const ok = await signIn(email, password);
     if (!ok) {
-      setAuthError('Google sign-in failed. Please try again.');
+      setAuthError('Login failed. Try demo@wave.app / demo123');
     }
   };
 
@@ -45,8 +43,29 @@ export function LoginScreen() {
           <Text style={styles.feature}>prediction</Text>
         </View>
 
-        <Pressable onPress={() => void handleGooglePress()} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
-          <Text style={styles.buttonText}>{busy ? 'signing in...' : 'continue with google'}</Text>
+        <Text style={styles.label}>Email</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="demo@wave.app"
+          placeholderTextColor={theme.colors.muted}
+          value={email}
+          onChangeText={setEmail}
+          editable={!busy}
+        />
+
+        <Text style={styles.label}>Password</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="demo123"
+          placeholderTextColor={theme.colors.muted}
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          editable={!busy}
+        />
+
+        <Pressable onPress={() => void handleLoginPress()} disabled={busy} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+          <Text style={styles.buttonText}>{busy ? 'signing in...' : 'sign in'}</Text>
         </Pressable>
 
         {authError ? <Text style={styles.errorText}>{authError}</Text> : null}
@@ -128,11 +147,31 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  label: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 16,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  input: {
+    backgroundColor: withAlpha(theme.colors.text, 0.05),
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: theme.colors.text,
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
   button: {
     backgroundColor: theme.colors.accent,
     paddingVertical: 14,
     borderRadius: theme.radius.pill,
     alignItems: 'center',
+    marginTop: 24,
   },
   buttonPressed: {
     transform: [{ scale: 0.99 }],

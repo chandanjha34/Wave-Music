@@ -81,7 +81,7 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
-
+     
 const styles = StyleSheet.create({
   root: {
     flex: 1,

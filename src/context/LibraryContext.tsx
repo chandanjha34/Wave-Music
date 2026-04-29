@@ -1,11 +1,11 @@
 import React, { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
 
 import { STORAGE_KEYS } from '../config';
 import { mockTracks } from '../data/mock';
 import { DownloadJob, Track } from '../types';
-import { api } from '../services/api';
+
+const FALLBACK_STREAM_URL = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
 interface LibraryContextValue {
   tracks: Track[];
@@ -20,8 +20,7 @@ interface LibraryContextValue {
 
 const LibraryContext = createContext<LibraryContextValue | null>(null);
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const MUSIC_DIR = `${FileSystem.documentDirectory ?? ''}wave_music/`;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const safeFileName = (value: string) => value.replace(/[<>:"/\\|?*]+/g, '_');
 
@@ -49,26 +48,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEYS.libraryTracks, JSON.stringify(tracks)).catch(() => undefined);
   }, [tracks]);
 
-  const ensureMusicDirectory = async () => {
-    if (!FileSystem.documentDirectory) {
-      return;
-    }
-
-    const info = await FileSystem.getInfoAsync(MUSIC_DIR);
-    if (!info.exists) {
-      await FileSystem.makeDirectoryAsync(MUSIC_DIR, { intermediates: true });
-    }
-  };
-
-  const saveToPhone = async (track: Track, quality: string) => {
-    if (!FileSystem.documentDirectory) {
-      return null;
-    }
-
-    await ensureMusicDirectory();
-    const localFilePath = `${MUSIC_DIR}${safeFileName(`${track.title} - ${track.artist}`)}.mp3`;
-    await FileSystem.downloadAsync(api.getStreamUrl(track.id), localFilePath);
-
+  const saveToLibrary = async (track: Track, quality: string) => {
+    // Demo mode: just update metadata without actual file download
+    const localFilePath = FALLBACK_STREAM_URL;
+    
     setTracks((current) => [
       {
         ...track,
@@ -96,7 +79,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const { job_id: jobId } = await api.requestDownload(track.id, quality);
+        // Demo mode: simulate download with progress
+        const jobId = `demo-${Date.now()}`;
         setActiveJobs((current) => ({
           ...current,
           [jobId]: {
@@ -107,73 +91,41 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           },
         }));
 
-        let pollCount = 0;
-        const maxPollAttempts = 160; // ~2.4 minutes with 900ms interval
-
-        while (pollCount < maxPollAttempts) {
-          pollCount += 1;
+        // Simulate progress
+        for (let i = 0; i <= 100; i += 10) {
           // eslint-disable-next-line no-await-in-loop
-          await sleep(900);
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            const data = await api.watchDownloadProgress(jobId);
-            setActiveJobs((current) => ({
-              ...current,
-              [jobId]: {
-                jobId,
-                trackId: track.id,
-                status: data.status === 'processing' ? 'downloading' : data.status,
-                progress: data.progress,
-              },
-            }));
-
-            if (data.status === 'done') {
-              await saveToPhone(track, quality);
-              break;
-            }
-
-            if (data.status === 'failed') {
-              break;
-            }
-          } catch (error) {
-            console.error(`Polling error for ${jobId}:`, error);
-            break;
-          }
+          await sleep(200);
+          setActiveJobs((current) => ({
+            ...current,
+            [jobId]: {
+              jobId,
+              trackId: track.id,
+              status: i === 100 ? 'done' : 'downloading',
+              progress: i,
+            },
+          }));
         }
 
-        if (pollCount >= maxPollAttempts) {
-          console.warn(`Download timeout for track ${track.id}`);
-        }
-      } catch (error) {
-        console.error('Download request error:', error);
-      } finally {
+        // Save to library
+        await saveToLibrary(track, quality);
+        
+        // Clean up job
         setActiveJobs((current) => {
           const next = { ...current };
-          Object.keys(next).forEach((key) => {
-            if (next[key].trackId === track.id) {
-              delete next[key];
-            }
-          });
+          delete next[jobId];
           return next;
         });
+      } catch (error) {
+        console.error('Download error:', error);
       }
     },
-    deleteTrack: async (trackId) => {
-      const target = tracks.find((track) => track.id === trackId);
-      if (target?.localFilePath) {
-        await FileSystem.deleteAsync(target.localFilePath, { idempotent: true }).catch(() => undefined);
-      }
+    deleteTrack: async (trackId: string) => {
       setTracks((current) => current.filter((track) => track.id !== trackId));
     },
     clearLibrary: async () => {
-      await Promise.all(
-        tracks
-          .filter((track) => track.localFilePath)
-          .map((track) => FileSystem.deleteAsync(track.localFilePath!, { idempotent: true }).catch(() => undefined)),
-      );
       setTracks([]);
     },
-  }), [activeJobs, tracks]);
+  }), [tracks, activeJobs]);
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;
 }
