@@ -11,6 +11,44 @@ import { KalshiMarket, KalshiService } from '../services/kalshi';
 import { SingerMusicMarket } from '../types';
 import { theme, withAlpha } from '../theme';
 
+const MUSIC_MARKET_KEYWORDS = [
+  'music',
+  'song',
+  'album',
+  'artist',
+  'singer',
+  'rapper',
+  'spotify',
+  'apple music',
+  'billboard',
+  'grammy',
+  'concert',
+  'tour',
+  'single',
+  'track',
+  'stream',
+  'listening',
+  'video',
+  'views',
+  'likes',
+];
+
+const isMusicRelatedKalshiMarket = (market: KalshiMarket) => {
+  const haystack = [
+    market.title,
+    market.subtitle,
+    market.description,
+    market.category,
+    market.event_ticker,
+    market.settlement_source,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return MUSIC_MARKET_KEYWORDS.some((keyword) => haystack.includes(keyword));
+};
+
 export function PredictionScreen() {
   const { user } = useAuth();
 
@@ -73,8 +111,13 @@ export function PredictionScreen() {
         setKalshiError('Showing public markets (auth unavailable)');
       }
 
-      setKalshiMarkets(markets);
+      const musicMarketsOnly = markets.filter(isMusicRelatedKalshiMarket);
+      setKalshiMarkets(musicMarketsOnly);
       setKalshiBalance(balance);
+
+      if (musicMarketsOnly.length === 0) {
+        setKalshiError('No music-related Kalshi markets are available right now.');
+      }
     } catch (error) {
       console.error('Failed to load Kalshi data:', error);
       setKalshiError('Failed to load prediction markets. Please check your connection.');
