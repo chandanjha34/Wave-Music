@@ -2,23 +2,16 @@
  * Kalshi API Authentication Utilities
  * Handles RSA-PSS signing for Kalshi API requests
  * 
- * IMPORTANT: This requires installing a React Native compatible crypto library.
- * Run: npm install react-native-rsa-native
- * or: npm install tweetnacl-js
- * 
- * If using react-native-rsa-native:
- * - iOS: pod install in ios/ folder
- * - Android: Should auto-link
+ * Note: RSA signing requires jsrsasign, which may not be available in React Native.
+ * If signing fails, the app falls back to public markets automatically.
  */
 
-import { NativeModules } from 'react-native';
-
-// Try to use react-native-rsa-native for RSA signing
-let RNRsa: any = null;
+let KJUR: any = null;
 try {
-  RNRsa = NativeModules.RNRsa;
-} catch (error) {
-  console.warn('react-native-rsa-native not available, RSA signing may fail');
+  const jsrsasign = require('jsrsasign');
+  KJUR = jsrsasign.KJUR;
+} catch (e) {
+  // jsrsasign not available - auth will fail gracefully and fall back to public markets
 }
 
 export interface KalshiAuthConfig {
@@ -28,8 +21,8 @@ export interface KalshiAuthConfig {
 }
 
 /**
- * Sign a request using RSA-PSS with SHA256
- * Requires react-native-rsa-native to be installed
+ * Sign a request using RSA SHA-256.
+ * Returns empty string if crypto unavailable - Kalshi will reject and app falls back to public markets.
  */
 export const signKalshiRequest = async (
   privateKey: string,
@@ -37,31 +30,23 @@ export const signKalshiRequest = async (
   method: string,
   path: string
 ): Promise<string> => {
-  // Strip query parameters from path
-  const pathWithoutQuery = path.split('?')[0];
-  
-  // Create message to sign: timestamp + method + path
-  const message = `${timestamp}${method}${pathWithoutQuery}`;
-  
-  if (!RNRsa) {
-    throw new Error(
-      'React Native RSA module not available. Install react-native-rsa-native: npm install react-native-rsa-native'
-    );
+  if (!KJUR || !KJUR.crypto || !KJUR.crypto.Signature) {
+    // Crypto not available - return empty so Kalshi rejects and we fall back to public markets
+    console.warn('RSA signing not available in this environment - will use public markets only');
+    return '';
   }
 
+  const pathWithoutQuery = path.split('?')[0];
+  const message = `${timestamp}${method}${pathWithoutQuery}`;
+
   try {
-    // Use react-native-rsa-native to sign with RSA-PSS
-    // Note: This is a simplified approach - you may need to adjust based on RNRsa API
-    const signature = await RNRsa.signWithAlgorithm(
-      message,
-      privateKey,
-      'RSA/ECB/PKCS1Padding'
-    );
-    
-    return signature;
+    const signer = new KJUR.crypto.Signature({ alg: 'SHA256withRSA' });
+    signer.init(privateKey);
+    signer.updateString(message);
+    return signer.sign();
   } catch (error) {
-    console.error('Failed to sign Kalshi request:', error);
-    throw error;
+    console.warn('Failed to sign Kalshi request, will use public markets:', error);
+    return '';
   }
 };
 

@@ -11,26 +11,34 @@ import { KalshiMarket, KalshiService } from '../services/kalshi';
 import { SingerMusicMarket } from '../types';
 import { theme, withAlpha } from '../theme';
 
-const MUSIC_MARKET_KEYWORDS = [
-  'music',
-  'song',
-  'album',
-  'artist',
-  'singer',
-  'rapper',
-  'spotify',
-  'apple music',
-  'billboard',
-  'grammy',
-  'concert',
-  'tour',
-  'single',
-  'track',
-  'stream',
-  'listening',
-  'video',
-  'views',
-  'likes',
+const MUSIC_MARKET_PATTERNS = [
+  /\bmusic\b/i,
+  /\bsong(s)?\b/i,
+  /\balbum(s)?\b/i,
+  /\bartist(s)?\b/i,
+  /\bsinger(s)?\b/i,
+  /\brapper(s)?\b/i,
+  /\bband(s)?\b/i,
+  /\bperformer(s)?\b/i,
+  /\bspotify\b/i,
+  /\bapple music\b/i,
+  /\bbillboard\b/i,
+  /\bgrammy(ies)?\b/i,
+  /\baward(s)?\b/i,
+  /\bconcert(s)?\b/i,
+  /\btour(s)?\b/i,
+  /\bsingle(s)?\b/i,
+  /\btrack(s)?\b/i,
+  /\bplaylist(s)?\b/i,
+  /\bstream(ing|s)?\b/i,
+  /\blisten(ing|s)?\b/i,
+  /\bview(s)?\b/i,
+  /\blike(s)?\b/i,
+  /\bchart(s)?\b/i,
+  /\btop 100\b/i,
+  /\bhot 100\b/i,
+  /\bnumber one\b/i,
+  /\b#1\b/i,
 ];
 
 const isMusicRelatedKalshiMarket = (market: KalshiMarket) => {
@@ -41,12 +49,13 @@ const isMusicRelatedKalshiMarket = (market: KalshiMarket) => {
     market.category,
     market.event_ticker,
     market.settlement_source,
+    market.ticker,
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
 
-  return MUSIC_MARKET_KEYWORDS.some((keyword) => haystack.includes(keyword));
+  return MUSIC_MARKET_PATTERNS.some((pattern) => pattern.test(haystack));
 };
 
 export function PredictionScreen() {
@@ -60,6 +69,7 @@ export function PredictionScreen() {
   const [kalshiMarkets, setKalshiMarkets] = useState<KalshiMarket[]>([]);
   const [kalshiLoading, setKalshiLoading] = useState(false);
   const [kalshiError, setKalshiError] = useState('');
+  const [kalshiNotice, setKalshiNotice] = useState('');
   const [kalshiBalance, setKalshiBalance] = useState(0);
 
   const kalshiService = useMemo(() => {
@@ -94,10 +104,12 @@ export function PredictionScreen() {
 
     setKalshiLoading(true);
     setKalshiError('');
+    setKalshiNotice('');
 
     try {
       let markets: KalshiMarket[] = [];
       let balance = 0;
+      let authUnavailable = false;
 
       try {
         markets = await kalshiService.getOpenMarkets(undefined, 20);
@@ -108,15 +120,23 @@ export function PredictionScreen() {
       } catch (authError) {
         console.warn('Auth failed, loading public markets:', authError);
         markets = await KalshiService.getPublicMarkets(20);
-        setKalshiError('Showing public markets (auth unavailable)');
+        authUnavailable = true;
       }
 
       const musicMarketsOnly = markets.filter(isMusicRelatedKalshiMarket);
-      setKalshiMarkets(musicMarketsOnly);
+      const marketsToShow = musicMarketsOnly.length > 0 ? musicMarketsOnly : markets;
+
+      setKalshiMarkets(marketsToShow);
       setKalshiBalance(balance);
 
       if (musicMarketsOnly.length === 0) {
-        setKalshiError('No music-related Kalshi markets are available right now.');
+        if (markets.length > 0) {
+          setKalshiNotice('No music-specific markets found right now. Showing all open markets instead.');
+        } else {
+          setKalshiError('No markets available right now.');
+        }
+      } else if (authUnavailable) {
+        setKalshiNotice('Showing public markets while authenticated access is unavailable.');
       }
     } catch (error) {
       console.error('Failed to load Kalshi data:', error);
@@ -243,6 +263,12 @@ export function PredictionScreen() {
           {kalshiError ? (
             <View style={styles.errorCard}>
               <Text style={styles.errorText}>{kalshiError}</Text>
+            </View>
+          ) : null}
+
+          {kalshiNotice ? (
+            <View style={styles.noticeCard}>
+              <Text style={styles.noticeText}>{kalshiNotice}</Text>
             </View>
           ) : null}
 
@@ -389,6 +415,17 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#FF6B6B',
+    fontSize: 12,
+  },
+  noticeCard: {
+    backgroundColor: withAlpha(theme.colors.accent, 0.12),
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: theme.colors.accent,
+  },
+  noticeText: {
+    color: theme.colors.text,
     fontSize: 12,
   },
   status: {
